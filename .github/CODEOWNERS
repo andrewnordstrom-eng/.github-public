@@ -1,0 +1,8 @@
+* @andrewnordstrom
+
+# Require maintainer review for policy-critical automation files.
+/.github/workflows/* @andrewnordstrom
+/.github/scripts/* @andrewnordstrom
+/.github/CODEOWNERS @andrewnordstrom
+/SECURITY.md @andrewnordstrom
+/CONTRIBUTING.md @andrewnordstrom

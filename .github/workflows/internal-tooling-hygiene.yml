@@ -1,0 +1,52 @@
+name: internal-tooling-hygiene
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  internal-tooling-hygiene:
+    name: internal-tooling-hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 1
+
+      - name: Block local editor and IDE config from being tracked
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          patterns=(
+            '^\.claude/'
+            '^\.cursor/'
+            '^\.codex/'
+            '^\.aider/'
+            '^\.copilot/'
+            '^AGENTS\.md$'
+            '^CLAUDE\.md$'
+            '^CLAUDE_CODE_PROMPT\.md$'
+            '^TASKING\.md$'
+            '^Prompts/'
+          )
+
+          fail=0
+          for pattern in "${patterns[@]}"; do
+            matches=$(git ls-files | grep -E "$pattern" || true)
+            if [[ -n "$matches" ]]; then
+              echo "Local workspace config detected in tracked files: $pattern"
+              echo "$matches"
+              fail=1
+            fi
+          done
+
+          if [[ "$fail" -ne 0 ]]; then
+            echo "Remove these files from git tracking and add them to .gitignore."
+            exit 1
+          fi
+
+          echo "Workspace hygiene check passed."

@@ -1,0 +1,167 @@
+name: pr-to-linear
+
+on:
+  workflow_call:
+    secrets:
+      LINEAR_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  pr-to-linear:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    concurrency:
+      group: pr-to-linear-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    if: >-
+      (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') &&
+      (github.event.action == 'opened' || github.event.action == 'reopened')
+    steps:
+      - name: Sync PR to Linear
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BRANCH_NAME: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ASSOC: ${{ github.event.pull_request.author_association }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        with:
+          script: |
+            const linearKey = process.env.LINEAR_API_KEY || '';
+            const branch = process.env.BRANCH_NAME || '';
+            const prTitle = process.env.PR_TITLE || '';
+            const prNumber = process.env.PR_NUMBER || '';
+            const prUrl = process.env.PR_URL || '';
+            const prAuthor = process.env.PR_AUTHOR || '';
+            const prAuthorAssoc = process.env.PR_AUTHOR_ASSOC || '';
+            const isFork = (process.env.IS_FORK || '').toLowerCase() === 'true';
+            const repoName = process.env.REPO_NAME || '';
+
+            if (prAuthor === 'dependabot[bot]') {
+              core.info('Dependabot PR; skipping Linear sync.');
+              return;
+            }
+
+            const trustedAuthors = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const trustedContext = !isFork && trustedAuthors.has(prAuthorAssoc);
+            if (!trustedContext) {
+              core.notice('Untrusted PR context detected; skipping privileged Linear sync.');
+              return;
+            }
+
+            if (!linearKey) {
+              core.setFailed(
+                'LINEAR_API_KEY is required in trusted context. Map LINEAR_API_KEY_PUBLIC explicitly in caller workflow.'
+              );
+              return;
+            }
+
+            const keyRegex = /[A-Za-z][A-Za-z0-9]+-\d+/;
+            const branchKey = (branch.match(keyRegex) || [])[0];
+            const titleKey = (prTitle.match(keyRegex) || [])[0];
+
+            if (branchKey || titleKey) {
+              core.info(
+                `Linear key found (${branchKey || titleKey}); existing sync handles this PR.`
+              );
+              return;
+            }
+
+            const linearGql = async (query, variables = {}) => {
+              const resp = await fetch('https://api.linear.app/graphql', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': linearKey,
+                },
+                body: JSON.stringify({ query, variables }),
+              });
+              return (await resp.json()).data;
+            };
+
+            const projectMap = {
+              'castoptimizer': 'CastOptimizer',
+              'CourseCompass': 'CourseCompass',
+              'Dewey': 'Dewey (Book Engine)',
+              'bluesky-community-feed': 'Bluesky Corgi',
+              'TinyFormer-84': 'TinyFormer-84',
+              'Northridge_FEA': null,
+              '.github': null,
+              'project-template': null,
+            };
+
+            const teamKey = repoName === 'bluesky-community-feed' ? 'LAB' : 'PROJ';
+            const projectName = projectMap[repoName] || null;
+
+            const teamData = await linearGql(
+              `query($key: String!) {
+                teams(filter: { key: { eq: $key } }) {
+                  nodes { id key }
+                }
+              }`,
+              { key: teamKey }
+            );
+            const teamId = teamData?.teams?.nodes?.[0]?.id;
+            if (!teamId) {
+              core.warning('No Linear team found for key ' + teamKey);
+              return;
+            }
+
+            let projectId = null;
+            if (projectName) {
+              const projData = await linearGql(
+                `query($name: String!) {
+                  projects(filter: { name: { eq: $name } }) {
+                    nodes { id name }
+                  }
+                }`,
+                { name: projectName }
+              );
+              projectId = projData?.projects?.nodes?.[0]?.id || null;
+            }
+
+            const issueDesc = [
+              'Synced from GitHub PR ' + '[#' + prNumber + '](' + prUrl + ')',
+              '',
+              '**Repo:** ' + repoName,
+              '**Branch:** `' + branch + '`',
+              '**Author:** ' + prAuthor,
+            ].join('\n');
+
+            const input = { teamId, title: prTitle, description: issueDesc };
+            if (projectId) input.projectId = projectId;
+
+            const result = await linearGql(
+              `mutation($input: IssueCreateInput!) {
+                issueCreate(input: $input) {
+                  success
+                  issue { id identifier url }
+                }
+              }`,
+              { input }
+            );
+
+            const issue = result?.issueCreate?.issue;
+            if (!issue) {
+              core.warning('Failed to create Linear issue');
+              core.warning(JSON.stringify(result));
+              return;
+            }
+
+            core.notice('Created Linear issue ' + issue.identifier + ': ' + issue.url);
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber, 10),
+              body: 'Tracked in Linear: [' + issue.identifier + '](' + issue.url + ')',
+            });

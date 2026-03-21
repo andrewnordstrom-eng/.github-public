@@ -1,0 +1,35 @@
+name: release-notes
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  release-notes:
+    name: release-notes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 100
+
+      - name: Build release notes draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "# Release Notes Draft"
+            echo
+            echo "Generated on $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo
+            git log --pretty='- %s (%h)' -n 30
+          } > release-notes.md
+
+      - name: Upload release notes artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-notes
+          path: release-notes.md

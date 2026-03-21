@@ -1,0 +1,127 @@
+name: linear-state-sync
+
+on:
+  workflow_call:
+    secrets:
+      LINEAR_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  linear-state-sync:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: linear-state-sync-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - name: Sync Linear state from PR lifecycle
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          ACTION: ${{ github.event.action }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          BRANCH_NAME: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          AUTHOR_ASSOC: ${{ github.event.pull_request.author_association }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+
+          trusted_context=false
+          if [[ "${IS_FORK:-false}" != "true" ]] && [[ "${AUTHOR_ASSOC:-}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
+            trusted_context=true
+          fi
+
+          if [[ "$trusted_context" != "true" ]]; then
+            echo "::notice::Untrusted PR context; skipping privileged Linear state sync."
+            exit 0
+          fi
+
+          if [[ -z "${LINEAR_API_KEY:-}" ]]; then
+            echo "LINEAR_API_KEY is not configured for trusted context; failing closed."
+            echo "Set repo secret LINEAR_API_KEY_PUBLIC and map it explicitly in caller workflow."
+            exit 1
+          fi
+
+          key_regex='[A-Za-z][A-Za-z0-9]+-[0-9]+'
+          linear_key=""
+
+          if [[ -n "${BRANCH_NAME:-}" ]]; then
+            linear_key=$(echo "$BRANCH_NAME" | grep -Eio "$key_regex" | head -n1 || true)
+          fi
+
+          if [[ -z "$linear_key" ]]; then
+            linear_key=$(printf '%s\n%s\n' "${PR_TITLE:-}" "${PR_BODY:-}" | grep -Eio "$key_regex" | head -n1 || true)
+          fi
+
+          if [[ -z "$linear_key" ]]; then
+            echo "No Linear key found in branch/title/body."
+            exit 1
+          fi
+
+          linear_key=$(echo "$linear_key" | tr '[:lower:]' '[:upper:]')
+
+          case "$ACTION" in
+            closed)
+              if [[ "${MERGED:-false}" == "true" ]]; then
+                target_type="completed"
+              else
+                target_type="canceled"
+              fi
+              ;;
+            *)
+              target_type="started"
+              ;;
+          esac
+
+          issue_query=$(jq -nc \
+            --arg key "$linear_key" \
+            '{query:"query($key:String!){ issue(id:$key){ id team { states { nodes { id name type } } } } }", variables:{key:$key}}')
+
+          issue_resp=$(curl -sS -X POST https://api.linear.app/graphql \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            --data "$issue_query")
+
+          issue_id=$(echo "$issue_resp" | jq -r '.data.issue.id // empty')
+          if [[ -z "$issue_id" ]]; then
+            echo "Linear issue '$linear_key' not found."
+            echo "$issue_resp"
+            exit 1
+          fi
+
+          state_id=$(echo "$issue_resp" | jq -r --arg target "$target_type" \
+            '.data.issue.team.states.nodes[] | select((.type|ascii_downcase)==$target) | .id' | head -n1)
+
+          if [[ -z "$state_id" && "$target_type" == "canceled" ]]; then
+            state_id=$(echo "$issue_resp" | jq -r \
+              '.data.issue.team.states.nodes[] | select((.type|ascii_downcase)=="completed") | .id' | head -n1)
+          fi
+
+          if [[ -z "$state_id" ]]; then
+            echo "No state with type '$target_type' found on Linear team for '$linear_key'."
+            exit 1
+          fi
+
+          update_mutation=$(jq -nc \
+            --arg issueId "$issue_id" \
+            --arg stateId "$state_id" \
+            '{query:"mutation($issueId:String!,$stateId:String!){ issueUpdate(id:$issueId,input:{stateId:$stateId}){ success } }", variables:{issueId:$issueId,stateId:$stateId}}')
+
+          update_resp=$(curl -sS -X POST https://api.linear.app/graphql \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            --data "$update_mutation")
+
+          update_ok=$(echo "$update_resp" | jq -r '.data.issueUpdate.success // false')
+          if [[ "$update_ok" != "true" ]]; then
+            echo "Linear update failed:"
+            echo "$update_resp"
+            exit 1
+          fi
+
+          echo "Synced '$linear_key' to Linear state type '$target_type'."

@@ -1,0 +1,96 @@
+name: linear-policy
+
+on:
+  workflow_call:
+    secrets:
+      LINEAR_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  linear-policy:
+    name: linear-policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch and Linear key
+        shell: bash
+        env:
+          BRANCH_NAME: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          ACTOR: ${{ github.actor }}
+          AUTHOR_ASSOC: ${{ github.event.pull_request.author_association }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$ACTOR" == "dependabot[bot]" ]] || [[ "$BRANCH_NAME" =~ ^dependabot/ ]]; then
+            echo "Dependabot PR detected; skipping Linear policy checks."
+            exit 0
+          fi
+
+          branch_regex='^dev/[A-Za-z][A-Za-z0-9]+-[0-9]+-[a-z0-9][a-z0-9-]*$'
+          key_regex='[A-Za-z][A-Za-z0-9]+-[0-9]+'
+
+          trusted_context=false
+          if [[ "${IS_FORK:-false}" != "true" ]] && [[ "${AUTHOR_ASSOC:-}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
+            trusted_context=true
+          fi
+
+          if [[ "$trusted_context" != "true" ]]; then
+            echo "::notice::Untrusted PR context; skipping Linear policy checks."
+            exit 0
+          fi
+
+          if [[ -z "$BRANCH_NAME" ]]; then
+            echo "Missing head branch context."
+            exit 1
+          fi
+
+          if ! [[ "$BRANCH_NAME" =~ $branch_regex ]]; then
+            echo "Branch '$BRANCH_NAME' must match dev/<LINEAR-KEY>-<slug>."
+            exit 1
+          fi
+
+          if ! printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" | grep -Eiq "$key_regex"; then
+            echo "PR title/body must include a Linear key like ABC-123."
+            exit 1
+          fi
+
+          branch_key=$(echo "$BRANCH_NAME" | grep -Eio "$key_regex" | head -n1 | tr '[:lower:]' '[:upper:]')
+          pr_key=$(printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" | grep -Eio "$key_regex" | head -n1 | tr '[:lower:]' '[:upper:]')
+
+          if [[ "$branch_key" != "$pr_key" ]]; then
+            echo "Linear key mismatch: branch has '$branch_key' but PR title/body has '$pr_key'."
+            echo "Use the same key in both places."
+            exit 1
+          fi
+
+          if [[ -z "${LINEAR_API_KEY:-}" ]]; then
+            echo "LINEAR_API_KEY is required in trusted context."
+            echo "Set repo secret LINEAR_API_KEY_PUBLIC and map it explicitly in the caller workflow."
+            exit 1
+          fi
+
+          issue_query=$(jq -nc \
+            --arg key "$branch_key" \
+            '{query:"query($key:String!){ issue(id:$key){ id identifier title } }", variables:{key:$key}}')
+
+          issue_resp=$(curl -sS -X POST https://api.linear.app/graphql \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            --data "$issue_query")
+
+          issue_id=$(echo "$issue_resp" | jq -r '.data.issue.id // empty')
+          if [[ -z "$issue_id" ]]; then
+            echo "Linear issue '$branch_key' was not found."
+            echo "$issue_resp"
+            exit 1
+          fi
+
+          issue_title=$(echo "$issue_resp" | jq -r '.data.issue.title // "unknown title"')
+          echo "Validated Linear issue '$branch_key' ($issue_title)."

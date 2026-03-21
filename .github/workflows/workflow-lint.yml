@@ -1,0 +1,20 @@
+name: workflow-lint
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: actionlint
+        uses: rhysd/actionlint@e7d448ef7507c20fc4c88a95d0c448b848cd6127

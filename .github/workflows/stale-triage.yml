@@ -1,0 +1,32 @@
+name: stale-triage
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  stale-triage:
+    name: stale-triage
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    concurrency:
+      group: stale-triage-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Mark stale issues and PRs
+        uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639
+        with:
+          stale-issue-message: 'This issue has been inactive for 21 days. It will close in 7 days if there is no update.'
+          stale-pr-message: 'This PR has been inactive for 14 days. It will close in 7 days if there is no update.'
+          days-before-issue-stale: 21
+          days-before-issue-close: 7
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: pinned,security
+          exempt-pr-labels: pinned,security

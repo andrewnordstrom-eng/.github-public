@@ -1,0 +1,99 @@
+name: security-gate
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  security-gate:
+    name: security-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Lightweight secret pattern scan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          fail=0
+          patterns=(
+            'ghp_[A-Za-z0-9]{36}'
+            'github_pat_[A-Za-z0-9_]{80,}'
+            'AKIA[0-9A-Z]{16}'
+            'AIza[0-9A-Za-z\-_]{35}'
+            'xox[baprs]-[0-9A-Za-z\-]{10,}'
+            '-----BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY-----'
+          )
+
+          if [[ "$EVENT_NAME" == "pull_request" ]] && [[ -n "$BASE_REF" ]]; then
+            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            mapfile -t candidate_files < <(git diff --name-only --diff-filter=ACMR "origin/$BASE_REF...HEAD")
+          else
+            mapfile -t candidate_files < <(git ls-files)
+          fi
+
+          scan_files=()
+          for f in "${candidate_files[@]}"; do
+            case "$f" in
+              *.md|*.txt)
+                continue
+                ;;
+              *)
+                scan_files+=("$f")
+                ;;
+            esac
+          done
+
+          if [ "${#scan_files[@]}" -eq 0 ]; then
+            echo "No candidate files to secret-scan for this event."
+            exit 0
+          fi
+
+          for p in "${patterns[@]}"; do
+            if git grep -nI -E "$p" -- "${scan_files[@]}" >/tmp/secret_matches.txt 2>/dev/null; then
+              echo "Potential secret pattern found for regex: $p"
+              cat /tmp/secret_matches.txt
+              fail=1
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo "Potential secrets detected."
+            exit 1
+          fi
+
+          echo "No high-signal secret patterns detected."
+
+      - name: Setup Node.js (if needed)
+        if: ${{ hashFiles('**/package.json') != '' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+
+      - name: NPM audit (if package-lock exists)
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "pull_request" ]] && [[ -n "$BASE_REF" ]]; then
+            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            if ! git diff --name-only "origin/$BASE_REF...HEAD" | grep -Eq '(^|/)package(-lock)?\.json$'; then
+              echo "Dependency manifests were not changed in this PR; skipping enforced npm audit."
+              exit 0
+            fi
+          fi
+
+          npm ci --ignore-scripts
+          npm audit --audit-level=high

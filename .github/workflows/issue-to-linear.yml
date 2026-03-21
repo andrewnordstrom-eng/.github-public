@@ -1,0 +1,161 @@
+name: issue-to-linear
+
+on:
+  workflow_call:
+    secrets:
+      LINEAR_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  issue-to-linear:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    concurrency:
+      group: issue-to-linear-${{ github.repository }}-${{ github.event.issue.number || github.run_id }}
+      cancel-in-progress: false
+    if: >-
+      github.event_name == 'issues' &&
+      (github.event.action == 'opened' || github.event.action == 'reopened')
+    steps:
+      - name: Sync issue to Linear
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        with:
+          script: |
+            const linearKey = process.env.LINEAR_API_KEY || '';
+            const title = process.env.ISSUE_TITLE || '';
+            const issueNumber = process.env.ISSUE_NUMBER || '';
+            const issueUrl = process.env.ISSUE_URL || '';
+            const issueAuthor = process.env.ISSUE_AUTHOR || '';
+            const repoName = process.env.REPO_NAME || '';
+
+            if (!linearKey) {
+              core.setFailed(
+                'LINEAR_API_KEY is required for issue-to-linear. Map LINEAR_API_KEY_PUBLIC explicitly in caller workflow.'
+              );
+              return;
+            }
+
+            const botAuthors = new Set(['dependabot[bot]', 'github-actions[bot]']);
+            if (botAuthors.has(issueAuthor)) {
+              core.info('Bot-created issue; skipping Linear sync.');
+              return;
+            }
+
+            const issue = context.payload.issue;
+            const labels = (issue.labels || []).map(
+              l => (typeof l === 'string' ? l : l.name)
+            );
+            const skipLabels = new Set(['eng-digest', 'quality-digest', 'cto-brief']);
+            if (labels.some(l => skipLabels.has(l))) {
+              core.info('Automated digest issue; skipping Linear sync.');
+              return;
+            }
+
+            const linearGql = async (query, variables = {}) => {
+              const resp = await fetch('https://api.linear.app/graphql', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': linearKey,
+                },
+                body: JSON.stringify({ query, variables }),
+              });
+              return (await resp.json()).data;
+            };
+
+            const projectMap = {
+              'castoptimizer': 'CastOptimizer',
+              'CourseCompass': 'CourseCompass',
+              'Dewey': 'Dewey (Book Engine)',
+              'bluesky-community-feed': 'Bluesky Corgi',
+              'TinyFormer-84': 'TinyFormer-84',
+            };
+
+            const teamKey = repoName === 'bluesky-community-feed' ? 'LAB' : 'PROJ';
+            const projectName = projectMap[repoName] || null;
+
+            const teamData = await linearGql(
+              `query($key: String!) {
+                teams(filter: { key: { eq: $key } }) {
+                  nodes { id }
+                }
+              }`,
+              { key: teamKey }
+            );
+            const teamId = teamData?.teams?.nodes?.[0]?.id;
+            if (!teamId) {
+              core.warning('No Linear team found for key ' + teamKey);
+              return;
+            }
+
+            let projectId = null;
+            if (projectName) {
+              const projData = await linearGql(
+                `query($name: String!) {
+                  projects(filter: { name: { eq: $name } }) {
+                    nodes { id }
+                  }
+                }`,
+                { name: projectName }
+              );
+              projectId = projData?.projects?.nodes?.[0]?.id || null;
+            }
+
+            let priority = 3;
+            if (labels.includes('priority:urgent')) priority = 1;
+            else if (labels.includes('priority:high')) priority = 2;
+            else if (labels.includes('priority:low')) priority = 4;
+
+            const desc = [
+              'Synced from GitHub issue ' + '[#' + issueNumber + '](' + issueUrl + ')',
+              '',
+              '**Repo:** ' + repoName,
+              '**Labels:** ' + (labels.join(', ') || 'none'),
+            ].join('\n');
+
+            const input = {
+              teamId,
+              title,
+              description: desc,
+              priority,
+            };
+            if (projectId) input.projectId = projectId;
+
+            const result = await linearGql(
+              `mutation($input: IssueCreateInput!) {
+                issueCreate(input: $input) {
+                  success
+                  issue { id identifier url }
+                }
+              }`,
+              { input }
+            );
+
+            const linearIssue = result?.issueCreate?.issue;
+            if (!linearIssue) {
+              core.warning('Failed to create Linear issue');
+              core.warning(JSON.stringify(result));
+              return;
+            }
+
+            core.notice(
+              'Created Linear issue ' + linearIssue.identifier + ': ' + linearIssue.url
+            );
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(issueNumber, 10),
+              body: 'Tracked in Linear: [' + linearIssue.identifier + '](' + linearIssue.url + ')',
+            });
