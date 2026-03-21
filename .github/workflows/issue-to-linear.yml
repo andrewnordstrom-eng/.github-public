@@ -17,13 +17,12 @@ jobs:
     concurrency:
       group: issue-to-linear-${{ github.repository }}-${{ github.event.issue.number || github.run_id }}
       cancel-in-progress: false
-    if: >-
-      github.event_name == 'issues' &&
-      (github.event.action == 'opened' || github.event.action == 'reopened')
     steps:
       - name: Sync issue to Linear
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -38,6 +37,19 @@ jobs:
             const issueUrl = process.env.ISSUE_URL || '';
             const issueAuthor = process.env.ISSUE_AUTHOR || '';
             const repoName = process.env.REPO_NAME || '';
+            const eventName = process.env.EVENT_NAME || '';
+            const action = process.env.ACTION || '';
+            const issue = context.payload.issue;
+
+            if (eventName !== 'issues' || !['opened', 'reopened'].includes(action)) {
+              core.info('Event/action not targeted by issue-to-linear; skipping.');
+              return;
+            }
+
+            if (!issue) {
+              core.info('No issue payload available; skipping.');
+              return;
+            }
 
             if (!linearKey) {
               core.setFailed(
@@ -52,7 +64,6 @@ jobs:
               return;
             }
 
-            const issue = context.payload.issue;
             const labels = (issue.labels || []).map(
               l => (typeof l === 'string' ? l : l.name)
             );

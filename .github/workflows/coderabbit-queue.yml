@@ -13,11 +13,6 @@ jobs:
     permissions:
       pull-requests: write
       issues: write
-    if: >-
-      github.event.pull_request.head.repo.fork == false &&
-      (github.event.pull_request.author_association == 'OWNER' ||
-       github.event.pull_request.author_association == 'MEMBER' ||
-       github.event.pull_request.author_association == 'COLLABORATOR')
     concurrency:
       group: coderabbit-queue-${{ github.repository }}
       cancel-in-progress: false
@@ -32,6 +27,14 @@ jobs:
 
             if (!pr) {
               core.info("No pull_request payload. Skipping queue management.");
+              return;
+            }
+
+            const trustedAuthors = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            const isFork = Boolean(pr.head && pr.head.repo && pr.head.repo.fork);
+            const assoc = (pr.author_association || "").toUpperCase();
+            if (isFork || !trustedAuthors.has(assoc)) {
+              core.notice("Untrusted PR context detected; skipping CodeRabbit queue mutation.");
               return;
             }
 
