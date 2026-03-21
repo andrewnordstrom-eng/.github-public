@@ -47,9 +47,24 @@ jobs:
 
       - name: Ensure major-update labels exist
         if: steps.gate.outputs.run == 'true'
+        continue-on-error: true
+        shell: bash
         run: |
-          gh label create major-update --description "Major dependency update requiring manual review" --color D93F0B --force
-          gh label create needs-review --description "Requires manual review before merge" --color 5319E7 --force
+          set -euo pipefail
+
+          ensure_label() {
+            local name="$1"
+            local desc="$2"
+            local color="$3"
+            if gh label list --limit 200 --json name --jq '.[].name' | grep -Fxq "$name"; then
+              gh label edit "$name" --description "$desc" --color "$color" >/dev/null 2>&1 || true
+            else
+              gh label create "$name" --description "$desc" --color "$color" >/dev/null
+            fi
+          }
+
+          ensure_label "major-update" "Major dependency update requiring manual review" "D93F0B"
+          ensure_label "needs-review" "Requires manual review before merge" "5319E7"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -72,6 +87,7 @@ jobs:
         if: |
           steps.gate.outputs.run == 'true' &&
           steps.metadata.outputs.update-type == 'version-update:semver-major'
+        continue-on-error: true
         run: gh pr edit "$PR_URL" --add-label "major-update,needs-review"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
