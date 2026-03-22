@@ -6,9 +6,9 @@ Public-safe reusable GitHub workflows for `andrewnordstrom-eng` public repositor
 
 Consumers should call workflows from this repository:
 
-`uses: andrewnordstrom-eng/.github-public/.github/workflows/<workflow>.yml@v1`
+`uses: andrewnordstrom-eng/.github-public/.github/workflows/<workflow>.yml@<40-char-sha>`
 
-For strict immutability, pin to a commit SHA.
+SHA pinning is mandatory.
 
 ## Secret Contract (Public Lane)
 
@@ -19,7 +19,7 @@ Caller example:
 ```yaml
 jobs:
   linear-policy:
-    uses: andrewnordstrom-eng/.github-public/.github/workflows/linear-policy.yml@v1
+    uses: andrewnordstrom-eng/.github-public/.github/workflows/linear-policy.yml@<40-char-sha>
     secrets:
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY_PUBLIC }}
 ```

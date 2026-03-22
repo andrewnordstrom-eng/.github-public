@@ -16,6 +16,11 @@ jobs:
     concurrency:
       group: dependabot-automerge-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - id: gate
         name: Gate Dependabot Context
@@ -37,61 +42,150 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Approve PR
+      - id: approve
+        name: Approve PR
         if: steps.gate.outputs.run == 'true'
-        continue-on-error: true
-        run: gh pr review --approve "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Ensure major-update labels exist
-        if: steps.gate.outputs.run == 'true'
-        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
+          if gh pr review --repo "$GH_REPO" --approve "$PR_URL"; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+            echo "Approved $PR_URL"
+          else
+            echo "status=warn" >> "$GITHUB_OUTPUT"
+            echo "::warning::Unable to auto-approve $PR_URL. Continuing."
+          fi
+
+      - id: ensure_labels
+        name: Ensure major-update labels exist
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          had_warning=false
 
           ensure_label() {
             local name="$1"
             local desc="$2"
             local color="$3"
-            if gh label list --limit 200 --json name --jq '.[].name' | grep -Fxq "$name"; then
-              gh label edit "$name" --description "$desc" --color "$color" >/dev/null 2>&1 || true
+
+            if gh label list --repo "$GH_REPO" --limit 200 --json name --jq '.[].name' | grep -Fxq "$name"; then
+              if ! gh label edit --repo "$GH_REPO" "$name" --description "$desc" --color "$color" >/dev/null 2>&1; then
+                echo "::warning::Unable to edit label '$name' in $GH_REPO"
+                had_warning=true
+              fi
             else
-              gh label create "$name" --description "$desc" --color "$color" >/dev/null
+              if ! gh label create --repo "$GH_REPO" "$name" --description "$desc" --color "$color" >/dev/null 2>&1; then
+                echo "::warning::Unable to create label '$name' in $GH_REPO"
+                had_warning=true
+              fi
             fi
           }
 
           ensure_label "major-update" "Major dependency update requiring manual review" "D93F0B"
           ensure_label "needs-review" "Requires manual review before merge" "5319E7"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Auto-merge patch and minor
+          if [[ "$had_warning" == "true" ]]; then
+            echo "status=warn" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: automerge_patch_minor
+        name: Auto-merge patch and minor
         if: |
           steps.gate.outputs.run == 'true' &&
           (
             steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
             steps.metadata.outputs.update-type == 'version-update:semver-minor'
           )
+        shell: bash
         run: |
-          if ! gh pr merge --auto --squash "$PR_URL"; then
+          set -euo pipefail
+          if gh pr merge --repo "$GH_REPO" --auto --squash "$PR_URL"; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+            echo "Enabled auto-merge for $PR_URL"
+          else
+            echo "status=warn" >> "$GITHUB_OUTPUT"
             echo "::warning::Unable to enable auto-merge for $PR_URL. Leaving PR open for manual follow-up."
           fi
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Label major updates
+      - id: label_major
+        name: Label major updates
         if: |
           steps.gate.outputs.run == 'true' &&
           steps.metadata.outputs.update-type == 'version-update:semver-major'
-        continue-on-error: true
-        run: gh pr edit "$PR_URL" --add-label "major-update,needs-review"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh pr edit --repo "$GH_REPO" "$PR_URL" --add-label "major-update,needs-review"; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+            echo "Labeled major update PR: $PR_URL"
+          else
+            echo "status=warn" >> "$GITHUB_OUTPUT"
+            echo "::warning::Unable to apply major-update labels to $PR_URL."
+          fi
+
+      - id: scoreboard
+        name: Build Reliability Scoreboard
+        if: always() && steps.gate.outputs.run == 'true'
+        shell: bash
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_NAME: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          APPROVE_STATUS: ${{ steps.approve.outputs.status }}
+          LABEL_STATUS: ${{ steps.ensure_labels.outputs.status }}
+          MERGE_STATUS: ${{ steps.automerge_patch_minor.outputs.status }}
+          MAJOR_LABEL_STATUS: ${{ steps.label_major.outputs.status }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          approve_status="${APPROVE_STATUS:-skipped}"
+          label_status="${LABEL_STATUS:-skipped}"
+          merge_status="${MERGE_STATUS:-skipped}"
+          major_label_status="${MAJOR_LABEL_STATUS:-skipped}"
+          update_type="${UPDATE_TYPE:-unknown}"
+
+          cat > dependabot-scoreboard.json <<JSON
+          {
+            "repo": "${REPO_NAME}",
+            "pr_url": "${PR_URL}",
+            "pr_number": "${PR_NUMBER}",
+            "update_type": "${update_type}",
+            "approve": "${approve_status}",
+            "label_ensure": "${label_status}",
+            "automerge_patch_minor": "${merge_status}",
+            "label_major": "${major_label_status}",
+            "run_id": "${RUN_ID}",
+            "run_attempt": "${RUN_ATTEMPT}"
+          }
+          JSON
+
+          {
+            echo "### Dependabot Reliability Scoreboard"
+            echo ""
+            echo "| Check | Status |"
+            echo "| --- | --- |"
+            echo "| update_type | ${update_type} |"
+            echo "| approve | ${approve_status} |"
+            echo "| ensure_labels | ${label_status} |"
+            echo "| automerge_patch_minor | ${merge_status} |"
+            echo "| label_major | ${major_label_status} |"
+            echo ""
+            echo "Scoreboard artifact: \`dependabot-scoreboard.json\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Reliability Scoreboard
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dependabot-reliability-scoreboard-${{ github.run_id }}
+          path: dependabot-scoreboard.json
+          if-no-files-found: error
 
       - name: Skip Notice
         if: steps.gate.outputs.run != 'true'
