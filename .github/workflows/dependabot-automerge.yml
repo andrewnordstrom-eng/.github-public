@@ -70,7 +70,7 @@ jobs:
             local desc="$2"
             local color="$3"
 
-            if gh label list --repo "$GH_REPO" --limit 200 --json name --jq '.[].name' | grep -Fxq "$name"; then
+            if gh label list --repo "$GH_REPO" --limit 500 --json name --jq '.[].name' | grep -Fxq "$name"; then
               if ! gh label edit --repo "$GH_REPO" "$name" --description "$desc" --color "$color" >/dev/null 2>&1; then
                 echo "::warning::Unable to edit label '$name' in $GH_REPO"
                 had_warning=true
@@ -150,20 +150,19 @@ jobs:
           major_label_status="${MAJOR_LABEL_STATUS:-skipped}"
           update_type="${UPDATE_TYPE:-unknown}"
 
-          cat > dependabot-scoreboard.json <<JSON
-          {
-            "repo": "${REPO_NAME}",
-            "pr_url": "${PR_URL}",
-            "pr_number": "${PR_NUMBER}",
-            "update_type": "${update_type}",
-            "approve": "${approve_status}",
-            "label_ensure": "${label_status}",
-            "automerge_patch_minor": "${merge_status}",
-            "label_major": "${major_label_status}",
-            "run_id": "${RUN_ID}",
-            "run_attempt": "${RUN_ATTEMPT}"
-          }
-          JSON
+          jq -n \
+            --arg repo "$REPO_NAME" \
+            --arg pr_url "$PR_URL" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg update_type "$update_type" \
+            --arg approve "$approve_status" \
+            --arg label_ensure "$label_status" \
+            --arg automerge_patch_minor "$merge_status" \
+            --arg label_major "$major_label_status" \
+            --arg run_id "$RUN_ID" \
+            --arg run_attempt "$RUN_ATTEMPT" \
+            '{repo: $repo, pr_url: $pr_url, pr_number: $pr_number, update_type: $update_type, approve: $approve, label_ensure: $label_ensure, automerge_patch_minor: $automerge_patch_minor, label_major: $label_major, run_id: $run_id, run_attempt: $run_attempt}' \
+            > dependabot-scoreboard.json
 
           {
             echo "### Dependabot Reliability Scoreboard"

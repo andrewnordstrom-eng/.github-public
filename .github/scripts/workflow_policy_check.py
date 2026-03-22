@@ -90,7 +90,10 @@ def check_file(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
     errors: list[str] = []
     if "secrets: inherit" in text:
-        errors.append(f"{path.name}: secrets: inherit is forbidden; use explicit secret mapping.")
+        errors.append(
+            f"{path.name}: secrets: inherit is forbidden; use explicit secret mapping "
+            "(example: secrets: { MY_SECRET: ${{ secrets.MY_SECRET }} })."
+        )
     errors.extend(check_uses_refs(path, text))
     errors.extend(check_top_permissions(path, text))
     errors.extend(check_pull_request_target_guard(path, text))
