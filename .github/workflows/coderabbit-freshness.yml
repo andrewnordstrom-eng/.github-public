@@ -64,7 +64,6 @@ jobs:
             }
 
             const staleMinutes = 120;
-            const staleMs = staleMinutes * 60 * 1000;
             const now = Date.now();
             const parseTime = (value) => {
               const ts = Date.parse(value || "");
@@ -93,9 +92,13 @@ jobs:
               ref: sha,
               per_page: 100,
             });
-            const coderabbitStatus = statuses.find(
-              (status) => ((status.context || "").trim().toLowerCase() === "coderabbit")
-            );
+            const coderabbitStatus = statuses
+              .filter((status) => ((status.context || "").trim().toLowerCase() === "coderabbit"))
+              .sort((a, b) => {
+                const aTs = parseTime(a.updated_at || a.created_at || "");
+                const bTs = parseTime(b.updated_at || b.created_at || "");
+                return bTs - aTs;
+              })[0];
 
             if (coderabbitStatus) {
               const description = ((coderabbitStatus.description || "").trim().toLowerCase());
@@ -131,13 +134,17 @@ jobs:
               return;
             }
 
-            const suitesPayload = await github.rest.checks.listSuitesForRef({
-              owner,
-              repo,
-              ref: sha,
-              per_page: 100,
-            });
-            const suites = (suitesPayload.data?.check_suites || []).filter(
+            const allSuites = await github.paginate(
+              github.rest.checks.listSuitesForRef,
+              {
+                owner,
+                repo,
+                ref: sha,
+                per_page: 100,
+              },
+              (response) => response.data?.check_suites || []
+            );
+            const suites = (allSuites || []).filter(
               (suite) => (((suite.app || {}).slug || "").trim().toLowerCase() === "coderabbitai")
             );
             if (suites.length === 0) {

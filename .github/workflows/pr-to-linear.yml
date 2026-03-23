@@ -125,6 +125,13 @@ jobs:
                 },
                 body: JSON.stringify({ query, variables }),
               });
+              if (!resp.ok) {
+                const body = await resp.text();
+                core.warning(
+                  `[pr-to-linear:audit] linear_http_error status=${resp.status} body=${String(body || '').slice(0, 200)}`
+                );
+                return null;
+              }
               return (await resp.json()).data;
             };
 
