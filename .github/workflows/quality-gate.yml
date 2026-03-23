@@ -18,7 +18,7 @@ jobs:
         if: ${{ hashFiles('**/package.json') != '' }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Validate Node install (if package-lock exists)
         if: ${{ hashFiles('package-lock.json') != '' }}
