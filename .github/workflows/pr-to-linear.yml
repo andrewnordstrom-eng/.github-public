@@ -48,25 +48,55 @@ jobs:
             const action = process.env.ACTION || '';
             const validEvents = new Set(['pull_request', 'pull_request_target']);
             const validActions = new Set(['opened', 'reopened']);
+            const emitMarker = (marker, message, level = 'notice') => {
+              const rendered = message
+                ? `[pr-to-linear:${marker}] ${message}`
+                : `[pr-to-linear:${marker}]`;
+              if (level === 'info') {
+                core.info(rendered);
+                return;
+              }
+              if (level === 'warning') {
+                core.warning(rendered);
+                return;
+              }
+              if (level === 'error') {
+                core.error(rendered);
+                return;
+              }
+              core.notice(rendered);
+            };
 
             if (!validEvents.has(eventName) || !validActions.has(action)) {
-              core.info('Event/action not targeted by pr-to-linear; skipping.');
+              emitMarker(
+                'skip_event',
+                `Event/action not targeted by pr-to-linear (${eventName}:${action}); skipping.`,
+                'info'
+              );
               return;
             }
 
             if (prAuthor === 'dependabot[bot]') {
-              core.info('Dependabot PR; skipping Linear sync.');
+              emitMarker('skip_dependabot', 'Dependabot PR; skipping Linear sync.');
               return;
             }
 
             const trustedAuthors = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
             const trustedContext = !isFork && trustedAuthors.has(prAuthorAssoc);
             if (!trustedContext) {
-              core.notice('Untrusted PR context detected; skipping privileged Linear sync.');
+              emitMarker(
+                'skip_untrusted',
+                'Untrusted PR context detected; skipping privileged Linear sync.'
+              );
               return;
             }
 
             if (!linearKey) {
+              emitMarker(
+                'fail_missing_linear_api_key',
+                'LINEAR_API_KEY is required in trusted context. Map LINEAR_API_KEY_PUBLIC explicitly in caller workflow.',
+                'error'
+              );
               core.setFailed(
                 'LINEAR_API_KEY is required in trusted context. Map LINEAR_API_KEY_PUBLIC explicitly in caller workflow.'
               );
@@ -78,8 +108,10 @@ jobs:
             const titleKey = (prTitle.match(keyRegex) || [])[0];
 
             if (branchKey || titleKey) {
-              core.info(
-                `Linear key found (${branchKey || titleKey}); existing sync handles this PR.`
+              emitMarker(
+                'key_found',
+                `Linear key found (${branchKey || titleKey}); existing sync handles this PR.`,
+                'info'
               );
               return;
             }
@@ -165,6 +197,7 @@ jobs:
               return;
             }
 
+            emitMarker('issue_created', `Created Linear issue ${issue.identifier}: ${issue.url}`);
             core.notice('Created Linear issue ' + issue.identifier + ': ' + issue.url);
 
             await github.rest.issues.createComment({

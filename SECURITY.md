@@ -18,7 +18,9 @@ automation playbooks.
 - Keep top-level workflow permissions at `contents: read` and elevate per job only.
 - Never use `secrets: inherit` in public caller workflows.
 - For `pull_request_target`, enforce trusted-context guards and avoid untrusted checkout/exec.
+- Prefer `pull_request` when workflow behavior does not require privileged context.
 - Use explicit, least-privilege secret mapping for Linear (`LINEAR_API_KEY_PUBLIC` lane).
+- Enforce CodeRabbit freshness for non-exempt human PRs (missing/skipped/stale should fail).
 
 ## Reporting
 
