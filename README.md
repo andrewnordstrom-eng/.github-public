@@ -9,6 +9,7 @@ Consumers should call workflows from this repository:
 `uses: andrewnordstrom-eng/.github-public/.github/workflows/<workflow>.yml@<40-char-sha>`
 
 SHA pinning is mandatory.
+Mutable refs like `@main` are not allowed for reusable workflow callers.
 
 ## Finding SHAs
 
@@ -48,5 +49,6 @@ jobs:
 - No `secrets: inherit`.
 - Pin third-party actions to immutable SHAs.
 - Guard privileged pull request automations for trusted context only.
+- Use `coderabbit-freshness` for non-exempt human PR reliability enforcement.
 
 See [SECURITY.md](SECURITY.md) for the full policy.
