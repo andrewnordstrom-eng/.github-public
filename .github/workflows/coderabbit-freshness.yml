@@ -18,11 +18,101 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         with:
           script: |
-            const pr = context.payload.pull_request;
-            if (!pr) {
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const payload = context.payload || {};
+
+            const parseTime = (value) => {
+              const ts = Date.parse(value || "");
+              return Number.isFinite(ts) ? ts : 0;
+            };
+
+            const failWithAction = (reason) => {
               core.setFailed(
-                "[coderabbit-freshness:fail] Missing pull_request payload. Trigger this workflow from pull_request events only."
+                `[coderabbit-freshness:fail] ${reason}. Next action: run "@coderabbitai review" on this PR and wait for a fresh CodeRabbit update. Temporary bypass requires label "coderabbit:exempt" with audit note.`
               );
+            };
+
+            const resolvePullRequest = async () => {
+              if (payload.pull_request) {
+                return payload.pull_request;
+              }
+
+              const statusContext = ((payload.context || payload.check_run?.name || "").trim().toLowerCase());
+              const codeRabbitSignal =
+                statusContext.includes("coderabbit") ||
+                ((payload.check_suite?.app?.slug || "").trim().toLowerCase() === "coderabbitai") ||
+                ((payload.check_run?.app?.slug || "").trim().toLowerCase() === "coderabbitai");
+              if (!codeRabbitSignal) {
+                core.info("[coderabbit-freshness:skip_non_coderabbit_event] Event is not a CodeRabbit signal.");
+                return null;
+              }
+
+              const eventSha = (
+                payload.sha ||
+                payload.check_suite?.head_sha ||
+                payload.check_run?.head_sha ||
+                ""
+              ).trim();
+              if (!eventSha) {
+                core.info("[coderabbit-freshness:skip_missing_sha] No event SHA found for non-PR trigger.");
+                return null;
+              }
+
+              let prNumber = null;
+              const attachedPrs = payload.check_suite?.pull_requests || payload.check_run?.pull_requests || [];
+              const openAttached = attachedPrs.find((item) => typeof item?.number === "number");
+              if (openAttached) {
+                prNumber = openAttached.number;
+              } else {
+                try {
+                  const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    owner,
+                    repo,
+                    commit_sha: eventSha,
+                  });
+                  const openPr = (associated.data || []).find(
+                    (item) => ((item.state || "").trim().toLowerCase() === "open")
+                  );
+                  if (openPr) {
+                    prNumber = openPr.number;
+                  }
+                } catch (err) {
+                  core.info(
+                    `[coderabbit-freshness:skip_api_error] Failed to resolve PRs for commit: ${err?.message || err}`
+                  );
+                  return null;
+                }
+              }
+
+              if (!prNumber) {
+                core.info("[coderabbit-freshness:skip_no_open_pr] No open PR is associated with this CodeRabbit signal.");
+                return null;
+              }
+
+              let prResponse;
+              try {
+                prResponse = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                });
+              } catch (err) {
+                core.info(
+                  `[coderabbit-freshness:skip_api_error] Failed to fetch PR #${prNumber}: ${err?.message || err}`
+                );
+                return null;
+              }
+              const resolvedPr = prResponse.data;
+              if (((resolvedPr.state || "").trim().toLowerCase()) !== "open") {
+                core.info("[coderabbit-freshness:skip_pr_not_open] Associated PR is not open.");
+                return null;
+              }
+              return resolvedPr;
+            };
+
+            const pr = await resolvePullRequest();
+            if (!pr) {
               return;
             }
 
@@ -53,8 +143,6 @@ jobs:
               return;
             }
 
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
             const sha = (pr.head?.sha || "").trim();
             if (!sha) {
               core.setFailed(
@@ -65,17 +153,14 @@ jobs:
 
             const staleMinutes = 120;
             const now = Date.now();
-            const parseTime = (value) => {
-              const ts = Date.parse(value || "");
-              return Number.isFinite(ts) ? ts : 0;
-            };
-            const failWithAction = (reason) => {
-              core.setFailed(
-                `[coderabbit-freshness:fail] ${reason}. Next action: run "@coderabbitai review" on this PR and wait for a fresh CodeRabbit update. Temporary bypass requires label "coderabbit:exempt" with audit note.`
-              );
-            };
 
-            const headCommit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
+            let headCommit;
+            try {
+              headCommit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
+            } catch (err) {
+              failWithAction(`Unable to fetch head commit (${sha}): ${err?.message || err}`);
+              return;
+            }
             const headCommittedAt = parseTime(
               headCommit.data?.commit?.committer?.date ||
                 headCommit.data?.commit?.author?.date ||
@@ -86,12 +171,18 @@ jobs:
               return;
             }
 
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              owner,
-              repo,
-              ref: sha,
-              per_page: 100,
-            });
+            let statuses;
+            try {
+              statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner,
+                repo,
+                ref: sha,
+                per_page: 100,
+              });
+            } catch (err) {
+              failWithAction(`Unable to list commit statuses for ${sha}: ${err?.message || err}`);
+              return;
+            }
             const coderabbitStatus = statuses
               .filter((status) => ((status.context || "").trim().toLowerCase() === "coderabbit"))
               .sort((a, b) => {
@@ -105,6 +196,7 @@ jobs:
               const state = ((coderabbitStatus.state || "").trim().toLowerCase());
               const updatedAt = parseTime(coderabbitStatus.updated_at || coderabbitStatus.created_at || "");
               const ageMinutes = Math.max(0, Math.floor((now - updatedAt) / 60000));
+              // Positive value means head commit timestamp is newer than CodeRabbit status timestamp.
               const lagFromHeadMinutes = Math.max(0, Math.floor((headCommittedAt - updatedAt) / 60000));
 
               if (description.includes("review skipped")) {

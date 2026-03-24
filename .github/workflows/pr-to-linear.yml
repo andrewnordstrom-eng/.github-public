@@ -20,7 +20,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Sync PR to Linear
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         env:
           EVENT_NAME: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
@@ -132,7 +132,14 @@ jobs:
                 );
                 return null;
               }
-              return (await resp.json()).data;
+              try {
+                return (await resp.json()).data;
+              } catch (parseErr) {
+                core.warning(
+                  `[pr-to-linear:audit] linear_json_parse_error status=${resp.status}: ${parseErr?.message || parseErr}`
+                );
+                return null;
+              }
             };
 
             const projectMap = {
@@ -205,7 +212,6 @@ jobs:
             }
 
             emitMarker('issue_created', `Created Linear issue ${issue.identifier}: ${issue.url}`);
-            core.notice('Created Linear issue ' + issue.identifier + ': ' + issue.url);
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
