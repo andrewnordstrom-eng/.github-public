@@ -119,7 +119,7 @@ jobs:
                 .map((label) => ((label?.name || "").trim().toLowerCase()))
                 .filter(Boolean)
             );
-            const exemptLabels = ["coderabbit:exempt", "coderabbit:hold", "coderabbit:queued"];
+            const exemptLabels = ["coderabbit:exempt", "coderabbit:hold"];
             const matchedExemptions = exemptLabels.filter((label) => labels.has(label));
             if (matchedExemptions.length > 0) {
               core.notice(
