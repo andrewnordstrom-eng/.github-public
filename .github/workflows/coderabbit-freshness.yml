@@ -65,16 +65,23 @@ jobs:
               if (openAttached) {
                 prNumber = openAttached.number;
               } else {
-                const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                  owner,
-                  repo,
-                  commit_sha: eventSha,
-                });
-                const openPr = (associated.data || []).find(
-                  (item) => ((item.state || "").trim().toLowerCase() === "open")
-                );
-                if (openPr) {
-                  prNumber = openPr.number;
+                try {
+                  const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    owner,
+                    repo,
+                    commit_sha: eventSha,
+                  });
+                  const openPr = (associated.data || []).find(
+                    (item) => ((item.state || "").trim().toLowerCase() === "open")
+                  );
+                  if (openPr) {
+                    prNumber = openPr.number;
+                  }
+                } catch (err) {
+                  core.info(
+                    `[coderabbit-freshness:skip_api_error] Failed to resolve PRs for commit: ${err?.message || err}`
+                  );
+                  return null;
                 }
               }
 
@@ -83,11 +90,19 @@ jobs:
                 return null;
               }
 
-              const prResponse = await github.rest.pulls.get({
-                owner,
-                repo,
-                pull_number: prNumber,
-              });
+              let prResponse;
+              try {
+                prResponse = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                });
+              } catch (err) {
+                core.info(
+                  `[coderabbit-freshness:skip_api_error] Failed to fetch PR #${prNumber}: ${err?.message || err}`
+                );
+                return null;
+              }
               const resolvedPr = prResponse.data;
               if (((resolvedPr.state || "").trim().toLowerCase()) !== "open") {
                 core.info("[coderabbit-freshness:skip_pr_not_open] Associated PR is not open.");
@@ -139,7 +154,13 @@ jobs:
             const staleMinutes = 120;
             const now = Date.now();
 
-            const headCommit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
+            let headCommit;
+            try {
+              headCommit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
+            } catch (err) {
+              failWithAction(`Unable to fetch head commit (${sha}): ${err?.message || err}`);
+              return;
+            }
             const headCommittedAt = parseTime(
               headCommit.data?.commit?.committer?.date ||
                 headCommit.data?.commit?.author?.date ||
@@ -150,12 +171,18 @@ jobs:
               return;
             }
 
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              owner,
-              repo,
-              ref: sha,
-              per_page: 100,
-            });
+            let statuses;
+            try {
+              statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner,
+                repo,
+                ref: sha,
+                per_page: 100,
+              });
+            } catch (err) {
+              failWithAction(`Unable to list commit statuses for ${sha}: ${err?.message || err}`);
+              return;
+            }
             const coderabbitStatus = statuses
               .filter((status) => ((status.context || "").trim().toLowerCase() === "coderabbit"))
               .sort((a, b) => {
@@ -169,6 +196,7 @@ jobs:
               const state = ((coderabbitStatus.state || "").trim().toLowerCase());
               const updatedAt = parseTime(coderabbitStatus.updated_at || coderabbitStatus.created_at || "");
               const ageMinutes = Math.max(0, Math.floor((now - updatedAt) / 60000));
+              // Positive value means head commit timestamp is newer than CodeRabbit status timestamp.
               const lagFromHeadMinutes = Math.max(0, Math.floor((headCommittedAt - updatedAt) / 60000));
 
               if (description.includes("review skipped")) {
