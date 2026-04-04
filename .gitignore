@@ -10,3 +10,16 @@
 /TASKING.md
 /Prompts/
 /copilot-instructions.md
+
+# Secrets and credentials (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*-key.json
+secrets.json
+secrets.*.json
+credentials.json
