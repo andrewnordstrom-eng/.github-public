@@ -1,0 +1,25 @@
+# Internal tooling artifacts (local-only; never commit)
+/.claude/
+/.cursor/
+/.codex/
+/.aider/
+/.copilot/
+/AGENTS.md
+/CLAUDE.md
+/CLAUDE_CODE_PROMPT.md
+/TASKING.md
+/Prompts/
+/copilot-instructions.md
+
+# Secrets and credentials (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*-key.json
+secrets.json
+secrets.*.json
+credentials.json
