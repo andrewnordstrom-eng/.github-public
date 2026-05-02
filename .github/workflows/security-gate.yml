@@ -34,7 +34,8 @@ jobs:
           )
 
           if [[ "$EVENT_NAME" == "pull_request" ]] && [[ -n "$BASE_REF" ]]; then
-            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1 ||
+              git fetch --no-tags origin "$BASE_REF"
             mapfile -t candidate_files < <(git diff --name-only --diff-filter=ACMR "origin/$BASE_REF...HEAD")
           else
             mapfile -t candidate_files < <(git ls-files)
@@ -79,7 +80,6 @@ jobs:
           node-version: '24'
 
       - name: NPM audit (if package-lock exists)
-        if: ${{ hashFiles('package-lock.json') != '' }}
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -87,13 +87,78 @@ jobs:
         run: |
           set -euo pipefail
 
+          lock_dirs=()
+          missing_locks=0
+
           if [[ "$EVENT_NAME" == "pull_request" ]] && [[ -n "$BASE_REF" ]]; then
-            git fetch --no-tags --depth=1 origin "$BASE_REF"
-            if ! git diff --name-only "origin/$BASE_REF...HEAD" | grep -Eq '(^|/)package(-lock)?\.json$'; then
+            git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1 ||
+              git fetch --no-tags origin "$BASE_REF"
+            changed_manifests=()
+            while IFS= read -r manifest; do
+              changed_manifests+=("$manifest")
+            done < <(
+              git diff --name-only "origin/$BASE_REF...HEAD" |
+                grep -E '(^|/)package(-lock)?\.json$' || true
+            )
+
+            if [ "${#changed_manifests[@]}" -eq 0 ]; then
               echo "Dependency manifests were not changed in this PR; skipping enforced npm audit."
               exit 0
             fi
+
+            for manifest in "${changed_manifests[@]}"; do
+              package_dir="$(dirname "$manifest")"
+
+              if [ -f "$package_dir/package-lock.json" ]; then
+                lock_dirs+=("$package_dir")
+              elif [ -f "$package_dir/package.json" ]; then
+                case "$manifest" in
+                  */package-lock.json|package-lock.json)
+                    echo "::error::Removed package-lock.json while package.json remains: $manifest"
+                    ;;
+                  *)
+                    echo "::error::Changed package.json has no sibling package-lock.json: $manifest"
+                    ;;
+                esac
+                missing_locks=1
+              elif [ -d "$package_dir" ]; then
+                echo "Changed dependency manifest was removed; no remaining package.json to audit: $manifest"
+              else
+                echo "Changed dependency manifest was removed; no remaining package directory to audit: $manifest"
+              fi
+            done
+          else
+            while IFS= read -r lockfile; do
+              package_dir="$(dirname "$lockfile")"
+              lock_dirs+=("$package_dir")
+            done < <(find . -name package-lock.json -not -path '*/node_modules/*' -print | sort)
           fi
 
-          npm ci --ignore-scripts
-          npm audit --audit-level=high
+          if [ "$missing_locks" -ne 0 ]; then
+            exit 1
+          fi
+
+          if [ "${#lock_dirs[@]}" -eq 0 ]; then
+            echo "No package-lock.json files matched this event; skipping enforced npm audit."
+            exit 0
+          fi
+
+          unique_lock_dirs=()
+          while IFS= read -r package_dir; do
+            unique_lock_dirs+=("$package_dir")
+          done < <(printf '%s\n' "${lock_dirs[@]}" | sort -u)
+
+          audit_failed=0
+          for package_dir in "${unique_lock_dirs[@]}"; do
+            echo "Running npm audit in $package_dir"
+            if ! (
+              cd "$package_dir"
+              npm ci --ignore-scripts
+              npm audit --audit-level=high
+            ); then
+              echo "::error::npm audit failed in $package_dir"
+              audit_failed=1
+            fi
+          done
+
+          exit "$audit_failed"
