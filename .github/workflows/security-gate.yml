@@ -34,7 +34,8 @@ jobs:
           )
 
           if [[ "$EVENT_NAME" == "pull_request" ]] && [[ -n "$BASE_REF" ]]; then
-            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1 ||
+              git fetch --no-tags origin "$BASE_REF"
             mapfile -t candidate_files < <(git diff --name-only --diff-filter=ACMR "origin/$BASE_REF...HEAD")
           else
             mapfile -t candidate_files < <(git ls-files)
@@ -79,7 +80,6 @@ jobs:
           node-version: '24'
 
       - name: NPM audit (if package-lock exists)
-        if: ${{ hashFiles('**/package-lock.json') != '' }}
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -91,7 +91,8 @@ jobs:
           missing_locks=0
 
           if [[ "$EVENT_NAME" == "pull_request" ]] && [[ -n "$BASE_REF" ]]; then
-            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1 ||
+              git fetch --no-tags origin "$BASE_REF"
             changed_manifests=()
             while IFS= read -r manifest; do
               changed_manifests+=("$manifest")
