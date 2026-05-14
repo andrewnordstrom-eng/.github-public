@@ -12,6 +12,11 @@ from pathlib import Path
 SHA_REF_RE = re.compile(r"@[0-9a-f]{40}$")
 USES_RE = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
 TOP_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+:")
+APPROVED_PRIVATE_WORKFLOW_REFS: dict[str, str] = {
+    "andrewnordstrom-eng/.github/.github/workflows/coderabbit-thread-check.yml": (
+        "140c3cf25c66fef0064c2745a10b339421df7323"
+    ),
+}
 
 
 def iter_workflows(root: Path) -> list[Path]:
@@ -51,6 +56,14 @@ def check_uses_refs(path: Path, text: str) -> list[str]:
             continue
         if not SHA_REF_RE.search(ref):
             errors.append(f"{path.name}: action ref must be pinned to a full commit SHA ({ref}).")
+            continue
+        target, _, sha = ref.rpartition("@")
+        approved_sha = APPROVED_PRIVATE_WORKFLOW_REFS.get(target)
+        if approved_sha is not None and sha != approved_sha:
+            errors.append(
+                f"{path.name}: private .github workflow pin for {target} must match "
+                f"approved PROJ-522 SHA {approved_sha} (got {sha})."
+            )
     return errors
 
 
