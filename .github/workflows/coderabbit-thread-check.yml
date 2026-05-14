@@ -13,4 +13,4 @@ permissions:
 
 jobs:
   coderabbit-thread-check:
-    uses: andrewnordstrom-eng/.github/.github/workflows/coderabbit-thread-check.yml@16278305236d6725ade3c7bbfdf74fe5c373efbb
+    uses: andrewnordstrom-eng/.github/.github/workflows/coderabbit-thread-check.yml@140c3cf25c66fef0064c2745a10b339421df7323

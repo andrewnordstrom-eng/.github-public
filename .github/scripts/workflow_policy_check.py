@@ -14,7 +14,7 @@ USES_RE = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
 TOP_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+:")
 APPROVED_PRIVATE_WORKFLOW_REFS: dict[str, str] = {
     "andrewnordstrom-eng/.github/.github/workflows/coderabbit-thread-check.yml": (
-        "16278305236d6725ade3c7bbfdf74fe5c373efbb"
+        "140c3cf25c66fef0064c2745a10b339421df7323"
     ),
 }
 
