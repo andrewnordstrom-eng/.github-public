@@ -146,14 +146,14 @@ jobs:
               'castoptimizer': 'CastOptimizer',
               'CourseCompass': 'CourseCompass',
               'Dewey': 'Dewey (Book Engine)',
-              'bluesky-community-feed': 'Bluesky Corgi',
+              'corgi': 'Bluesky Corgi',
               'TinyFormer-84': 'TinyFormer-84',
               'Northridge_FEA': null,
               '.github': null,
               'project-template': null,
             };
 
-            const teamKey = repoName === 'bluesky-community-feed' ? 'LAB' : 'PROJ';
+            const teamKey = repoName === 'corgi' ? 'LAB' : 'PROJ';
             const projectName = projectMap[repoName] || null;
 
             const teamData = await linearGql(
