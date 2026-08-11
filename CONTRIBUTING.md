@@ -23,4 +23,4 @@ auditable, and security-first.
 2. Include threat-model notes in PR description for privileged behavior changes.
 3. Run local checks before pushing:
    - `python3 .github/scripts/workflow_policy_check.py --root .github/workflows`
-4. Validate canary behavior in `corgi` before broader rollout.
+4. Validate canary behavior in `andrewnordstrom-eng/corgi` against the reviewed `andrewnordstrom-eng/.github-public` workflow commit, pinned by its exact 40-character SHA, before broader rollout.

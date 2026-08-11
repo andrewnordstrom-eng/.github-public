@@ -93,8 +93,19 @@ jobs:
               'TinyFormer-84': 'TinyFormer-84',
             };
 
-            const teamKey = repoName === 'corgi' ? 'LAB' : 'PROJ';
+            const teamKey = 'PROJ';
             const projectName = projectMap[repoName] || null;
+
+            // linear-project-selection:start
+            const selectProjectForTeam = (projects, teamId) => {
+              if (!Array.isArray(projects)) return null;
+              return projects.find(
+                project =>
+                  project?.id &&
+                  project?.teams?.nodes?.some(team => team?.id === teamId)
+              ) || null;
+            };
+            // linear-project-selection:end
 
             const teamData = await linearGql(
               `query($key: String!) {
@@ -115,12 +126,27 @@ jobs:
               const projData = await linearGql(
                 `query($name: String!) {
                   projects(filter: { name: { eq: $name } }) {
-                    nodes { id }
+                    nodes {
+                      id
+                      name
+                      teams { nodes { id key } }
+                    }
                   }
                 }`,
                 { name: projectName }
               );
-              projectId = projData?.projects?.nodes?.[0]?.id || null;
+              const project = selectProjectForTeam(
+                projData?.projects?.nodes,
+                teamId
+              );
+              projectId = project?.id || null;
+              if (!projectId) {
+                core.warning(
+                  'No Linear project named ' + projectName +
+                  ' is associated with team ' + teamKey + '; skipping.'
+                );
+                return;
+              }
             }
 
             let priority = 3;
