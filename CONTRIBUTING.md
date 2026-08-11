@@ -23,4 +23,4 @@ auditable, and security-first.
 2. Include threat-model notes in PR description for privileged behavior changes.
 3. Run local checks before pushing:
    - `python3 .github/scripts/workflow_policy_check.py --root .github/workflows`
-4. Validate canary behavior in `bluesky-community-feed` before broader rollout.
+4. Validate canary behavior in `corgi` before broader rollout.
