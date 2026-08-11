@@ -26,3 +26,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/workflow_policy_check.py --root .github/workflows
+
+      - name: Test Linear project routing guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test .github/scripts/tests/linear-project-selection.test.mjs
